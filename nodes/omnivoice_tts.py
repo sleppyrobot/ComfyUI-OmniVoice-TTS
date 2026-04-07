@@ -636,66 +636,74 @@ class OmniVoiceLongformTTS:
                 audio_out = np.concatenate(audio_chunks, axis=0)
 
             result = numpy_audio_to_comfy(audio_out, OMNIVOICE_SAMPLE_RATE)
+            
             srt_output = ""
-try:
-    whisper_pipe = None
 
-    # Reuse connected whisper node if available
-    if whisper_model is not None:
-        whisper_pipe = get_or_cache_whisper(whisper_model, model, device, dtype)
+            try:
+                whisper_pipe = None
 
-    # Otherwise fall back to the model already attached to OmniVoice
-    if whisper_pipe is None and hasattr(omnivoice_model, "_asr_pipe"):
-        whisper_pipe = omnivoice_model._asr_pipe
+                # Reuse connected whisper node if available
+                if whisper_model is not None:
+                    whisper_pipe = get_or_cache_whisper(
+                        whisper_model, model, device, dtype
+                    )
 
-    # Final fallback: auto-load a local whisper model
-    if whisper_pipe is None:
-        local_name = find_local_whisper_model()
-        if local_name is not None:
-            whisper_pipe = load_whisper_pipeline(local_name, device, dtype)
+                # Otherwise fall back to the model already attached to OmniVoice
+                if whisper_pipe is None and hasattr(omnivoice_model, "_asr_pipe"):
+                    whisper_pipe = omnivoice_model._asr_pipe
 
-    if whisper_pipe is not None:
-        logger.info("Generating SRT subtitles from synthesized audio...")
+                # Final fallback: auto-load a local whisper model
+                if whisper_pipe is None:
+                    local_name = find_local_whisper_model()
+                    if local_name is not None:
+                        whisper_pipe = load_whisper_pipeline(local_name, device, dtype)
 
-        asr_result = whisper_pipe(
-            audio_out,
-            chunk_length_s=30,
-            batch_size=8,
-            return_timestamps=True,
-        )
+                if whisper_pipe is not None:
+                    logger.info("Generating SRT subtitles from synthesized audio...")
 
-        segments = []
+                    asr_result = whisper_pipe(
+                        {
+                            "array": audio_out,
+                            "sampling_rate": OMNIVOICE_SAMPLE_RATE,
+                        },
+                        chunk_length_s=30,
+                        batch_size=8,
+                        return_timestamps=True,
+                    )
 
-        # Whisper may return either 'chunks' or 'segments' depending on transformers version
-        if isinstance(asr_result, dict):
-            if "chunks" in asr_result:
-                for chunk in asr_result["chunks"]:
-                    ts = chunk.get("timestamp")
-                    if not ts or ts[0] is None or ts[1] is None:
-                        continue
+                    segments = []
 
-                    segments.append({
-                        "start": float(ts[0]),
-                        "end": float(ts[1]),
-                        "text": chunk.get("text", "")
-                    })
+                    if isinstance(asr_result, dict):
+                        if "chunks" in asr_result:
+                            for chunk in asr_result["chunks"]:
+                                ts = chunk.get("timestamp")
+                                if not ts or ts[0] is None or ts[1] is None:
+                                    continue
 
-            elif "segments" in asr_result:
-                for seg in asr_result["segments"]:
-                    segments.append({
-                        "start": float(seg["start"]),
-                        "end": float(seg["end"]),
-                        "text": seg["text"]
-                    })
+                                segments.append({
+                                    "start": float(ts[0]),
+                                    "end": float(ts[1]),
+                                    "text": chunk.get("text", "")
+                                })
 
-        if segments:
-            srt_output = _segments_to_srt(segments)
-        else:
-            logger.warning("Whisper returned no timestamp segments for SRT generation")
+                        elif "segments" in asr_result:
+                            for seg in asr_result["segments"]:
+                                segments.append({
+                                    "start": float(seg["start"]),
+                                    "end": float(seg["end"]),
+                                    "text": seg["text"]
+                                })
 
-except Exception as e:
-    logger.warning(f"Failed to generate SRT: {e}")
-    srt_output = ""
+                    if segments:
+                        srt_output = _segments_to_srt(segments)
+                    else:
+                        logger.warning(
+                            "Whisper returned no timestamp segments for SRT generation"
+                        )
+
+            except Exception as e:
+                logger.warning(f"Failed to generate SRT: {e}")
+                srt_output = ""
 
             logger.info(
                 f"Generated {len(audio_out) / OMNIVOICE_SAMPLE_RATE:.2f}s of audio "
