@@ -56,7 +56,30 @@ def _format_srt_timestamp(seconds: float) -> str:
 
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
-
+def _wrap_text(text: str, max_width: int = 48) -> str:
+    """Wrap text to a maximum width to prevent screen overflow in SRT."""
+    if not text or len(text) <= max_width:
+        return text
+    
+    words = text.split()
+    lines = []
+    current_line = []
+    current_length = 0
+    
+    for word in words:
+        if current_length + len(word) + 1 > max_width:
+            if current_line:
+                lines.append(" ".join(current_line))
+            current_line = [word]
+            current_length = len(word)
+        else:
+            current_line.append(word)
+            current_length += len(word) + 1
+            
+    if current_line:
+        lines.append(" ".join(current_line))
+        
+    return "\n".join(lines)
 
 def _segments_to_srt(segments) -> str:
     """Convert Whisper timestamp segments into SRT text."""
@@ -65,7 +88,8 @@ def _segments_to_srt(segments) -> str:
     for idx, seg in enumerate(segments, start=1):
         start = _format_srt_timestamp(seg["start"])
         end = _format_srt_timestamp(seg["end"])
-        text = seg["text"].strip()
+        # Wrap text to ensure it fits on screen
+        text = _wrap_text(seg["text"].strip())
 
         lines.append(
             f"{idx}\n{start} --> {end}\n{text}\n"
@@ -647,7 +671,7 @@ class OmniVoiceLongformTTS:
             
             srt_output = ""
 
-            # SRT generation logic
+            # Only trigger transcription if the toggle is True
             if generate_srt:
                 try:
                     whisper_pipe = None
@@ -669,16 +693,20 @@ class OmniVoiceLongformTTS:
                             whisper_pipe = load_whisper_pipeline(local_name, device, dtype)
 
                     if whisper_pipe is not None:
-                        logger.info("Generating SRT subtitles from synthesized audio...")
+                        logger.info("Generating SRT subtitles with native long-form logic...")
 
+                        # Use generate_kwargs and task="transcribe" to trigger native Whisper long-form
+                        # logic, which handles its own chunking and removes experimental warnings.
                         asr_result = whisper_pipe(
                             {
                                 "array": audio_out,
                                 "sampling_rate": OMNIVOICE_SAMPLE_RATE,
                             },
-                            chunk_length_s=30,
-                            batch_size=8,
+                            #chunk_length_s=30,
+                            #batch_size=8,
                             return_timestamps=True,
+                            generate_kwargs={"task": "transcribe"} ## native
+
                         )
 
                         segments = []
@@ -687,12 +715,12 @@ class OmniVoiceLongformTTS:
                             if "chunks" in asr_result:
                                 for chunk in asr_result["chunks"]:
                                     ts = chunk.get("timestamp")
-                                    if not ts or ts[0] is None or ts[1] is None:
+                                    if not ts or ts[0] is None:
                                         continue
 
                                     segments.append({
                                         "start": float(ts[0]),
-                                        "end": float(ts[1]),
+                                        "end": float(ts[1]) if ts[1] is not None else float(ts[0]) + 2.0,
                                         "text": chunk.get("text", "")
                                     })
 
