@@ -43,6 +43,35 @@ logger = logging.getLogger("OmniVoice")
 
 OMNIVOICE_SAMPLE_RATE = 24000
 
+def _format_srt_timestamp(seconds: float) -> str:
+    """Convert seconds to SRT timestamp format: HH:MM:SS,mmm"""
+    millis = int(round(seconds * 1000))
+
+    hours = millis // 3_600_000
+    millis %= 3_600_000
+    minutes = millis // 60_000
+    millis %= 60_000
+    secs = millis // 1000
+    millis %= 1000
+
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+
+
+
+def _segments_to_srt(segments) -> str:
+    """Convert Whisper timestamp segments into SRT text."""
+    lines = []
+
+    for idx, seg in enumerate(segments, start=1):
+        start = _format_srt_timestamp(seg["start"])
+        end = _format_srt_timestamp(seg["end"])
+        text = seg["text"].strip()
+
+        lines.append(
+            f"{idx}\n{start} --> {end}\n{text}\n"
+        )
+
+    return "\n".join(lines)
 
 def _is_cjk(char: str) -> bool:
     """Check if a character belongs to a script that doesn't use spaces between words."""
@@ -421,8 +450,8 @@ class OmniVoiceLongformTTS:
             },
         }
 
-    RETURN_TYPES = ("AUDIO",)
-    RETURN_NAMES = ("audio",)
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "srt")
     FUNCTION = "generate"
     CATEGORY = "OmniVoice"
     DESCRIPTION = (
@@ -607,6 +636,66 @@ class OmniVoiceLongformTTS:
                 audio_out = np.concatenate(audio_chunks, axis=0)
 
             result = numpy_audio_to_comfy(audio_out, OMNIVOICE_SAMPLE_RATE)
+            srt_output = ""
+try:
+    whisper_pipe = None
+
+    # Reuse connected whisper node if available
+    if whisper_model is not None:
+        whisper_pipe = get_or_cache_whisper(whisper_model, model, device, dtype)
+
+    # Otherwise fall back to the model already attached to OmniVoice
+    if whisper_pipe is None and hasattr(omnivoice_model, "_asr_pipe"):
+        whisper_pipe = omnivoice_model._asr_pipe
+
+    # Final fallback: auto-load a local whisper model
+    if whisper_pipe is None:
+        local_name = find_local_whisper_model()
+        if local_name is not None:
+            whisper_pipe = load_whisper_pipeline(local_name, device, dtype)
+
+    if whisper_pipe is not None:
+        logger.info("Generating SRT subtitles from synthesized audio...")
+
+        asr_result = whisper_pipe(
+            audio_out,
+            chunk_length_s=30,
+            batch_size=8,
+            return_timestamps=True,
+        )
+
+        segments = []
+
+        # Whisper may return either 'chunks' or 'segments' depending on transformers version
+        if isinstance(asr_result, dict):
+            if "chunks" in asr_result:
+                for chunk in asr_result["chunks"]:
+                    ts = chunk.get("timestamp")
+                    if not ts or ts[0] is None or ts[1] is None:
+                        continue
+
+                    segments.append({
+                        "start": float(ts[0]),
+                        "end": float(ts[1]),
+                        "text": chunk.get("text", "")
+                    })
+
+            elif "segments" in asr_result:
+                for seg in asr_result["segments"]:
+                    segments.append({
+                        "start": float(seg["start"]),
+                        "end": float(seg["end"]),
+                        "text": seg["text"]
+                    })
+
+        if segments:
+            srt_output = _segments_to_srt(segments)
+        else:
+            logger.warning("Whisper returned no timestamp segments for SRT generation")
+
+except Exception as e:
+    logger.warning(f"Failed to generate SRT: {e}")
+    srt_output = ""
 
             logger.info(
                 f"Generated {len(audio_out) / OMNIVOICE_SAMPLE_RATE:.2f}s of audio "
@@ -623,7 +712,7 @@ class OmniVoiceLongformTTS:
 
         if result is None:
             raise RuntimeError("Generation failed — see logs above.")
-        return (result,)
+        return (result, srt_output)
 
     def _check_interrupt(self):
         """Check if processing was interrupted."""
