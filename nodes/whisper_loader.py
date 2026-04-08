@@ -227,7 +227,7 @@ def load_whisper_pipeline(model_name: str, device: str = "auto", dtype: str = "a
         "automatic-speech-recognition",
         model=str(model_path),
         torch_dtype=asr_dtype,
-        device_map=device_str,
+        device=device_str,
     )
 
     logger.info(f"Whisper ASR model loaded on {device_str} ({asr_dtype}).")

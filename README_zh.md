@@ -68,7 +68,7 @@ python install.py
 | preprocess_prompt | BOOLEAN | True | 预处理参考音频（去除静音，添加标点） |
 | postprocess_output | BOOLEAN | True | 后处理生成音频（去除长静音） |
 | keep_model_loaded | BOOLEAN | True | 保持模型加载（运行间自动卸载到CPU） |
-| instruct | STRING | "" | 方言/风格指令（如 `四川话`）。应用于每个分块。留空使用默认 |
+| instruct | STRING | "" | 方言/风格指令，仅支持特定值 — 见[方言/风格指令](#方言风格指令)。应用于每个分块 |
 
 **可选输入：**
 - `ref_audio` — 声音克隆参考音频（3-15秒最佳）
@@ -101,7 +101,7 @@ python install.py
 | preprocess_prompt | BOOLEAN | True | 预处理参考音频 |
 | postprocess_output | BOOLEAN | True | 后处理生成音频 |
 | keep_model_loaded | BOOLEAN | True | 保持模型加载 |
-| instruct | STRING | "" | 方言/风格指令（如 `四川话`）。留空使用默认 |
+| instruct | STRING | "" | 方言/风格指令，仅支持特定值 — 见[方言/风格指令](#方言风格指令) |
 
 **可选输入：**
 - `whisper_model` — 预加载的Whisper ASR模型
@@ -160,7 +160,7 @@ python install.py
 | keep_model_loaded | BOOLEAN | True | 保持模型加载 |
 | speaker_N_audio | AUDIO | 可选 | 说话人N的参考音频（1-10） |
 | speaker_N_ref_text | STRING | "" | 说话人N参考音频的转录文本 |
-| speaker_N_instruct | STRING | "" | 说话人N的方言/风格指令（如 `四川话`）。留空使用默认 |
+| speaker_N_instruct | STRING | "" | 说话人N的方言/风格指令，仅支持特定值 — 见[方言/风格指令](#方言风格指令) |
 
 说话人输入根据 `num_speakers` 动态显示/隐藏（ComfyUI >= 0.8.1）。
 
@@ -228,15 +228,27 @@ OmniVoice的架构（Qwen3骨干）通过transformers支持的注意力后端有
 
 ## 方言/风格指令
 
-声音克隆、长文本和多说话人节点提供了 `instruct` 字段，用于指定方言或说话风格。模型默认使用标准普通话，通过此字段可以切换到地方方言。
+声音克隆、长文本和多说话人节点提供了 `instruct` 字段，用于指定方言或说话风格。**仅支持以下列出的值** — 模型会验证输入并拒绝不支持的值。
 
-**示例：**
-| 输入 | 效果 |
-|------|------|
-| `四川话` | 四川方言 |
-| `陕西话` | 陕西方言 |
-| `东北话` | 东北方言 |
-| `广东话` | 粤语（以普通话风格发音） |
+**英文值**（逗号分隔，如 `male, indian accent`）：
+| 类别 | 有效值 |
+|------|--------|
+| **性别** | `male`, `female` |
+| **年龄** | `child`, `young adult`, `teenager`, `middle-aged`, `elderly` |
+| **口音** | `american accent`, `british accent`, `australian accent`, `canadian accent`, `chinese accent`, `indian accent`, `japanese accent`, `korean accent`, `portuguese accent`, `russian accent` |
+| **音调** | `very low pitch`, `low pitch`, `moderate pitch`, `high pitch`, `very high pitch` |
+| **风格** | `whisper` |
+
+**中文值**（全角逗号分隔，如 `男，河南话`）：
+| 类别 | 有效值 |
+|------|--------|
+| **性别** | `男`, `女` |
+| **年龄** | `儿童`, `少年`, `青年`, `中年`, `老年` |
+| **方言** | `四川话`, `东北话`, `陕西话`, `河南话`, `云南话`, `贵州话`, `甘肃话`, `宁夏话`, `石家庄话`, `济南话`, `青岛话`, `桂林话` |
+| **音调** | `极低音调`, `低音调`, `中音调`, `高音调`, `极高音调` |
+| **风格** | `耳语` |
+
+> **注意：** 每条指令只使用英文或中文值，不要混合使用。
 
 留空则使用默认行为（中文文本默认标准普通话）。
 
@@ -244,18 +256,18 @@ OmniVoice的架构（Qwen3骨干）通过transformers支持的注意力后端有
 
 ## 声音设计属性
 
-`voice_instruct` 参数用逗号分隔的属性：
+`voice_instruct` 参数用逗号分隔的属性（有效值与上方 `instruct` 字段相同）：
 
 | 类别 | 选项 |
 |------|------|
-| **性别** | `male`（男）、`female`（女） |
-| **年龄** | `child`（儿童）、`young`（青年）、`middle-aged`（中年）、`elderly`（老年） |
-| **音调** | `very low pitch`、`low pitch`、`medium pitch`、`high pitch`、`very high pitch` |
-| **风格** | `whisper`（耳语） |
-| **英语口音** | `american accent`、`british accent`、`australian accent` 等 |
-| **汉语方言** | `四川话`、`陕西话`、`广东话`、`东北话`、`山东话`、`河南话`、`上海话`、`闽南话`、`客家话` 等 |
+| **性别** | `male`, `female` |
+| **年龄** | `child`, `young adult`, `teenager`, `middle-aged`, `elderly` |
+| **口音** | `american accent`, `british accent`, `australian accent`, `canadian accent`, `chinese accent`, `indian accent`, `japanese accent`, `korean accent`, `portuguese accent`, `russian accent` |
+| **音调** | `very low pitch`, `low pitch`, `moderate pitch`, `high pitch`, `very high pitch` |
+| **风格** | `whisper` |
+| **汉语方言** | `四川话`, `东北话`, `陕西话`, `河南话`, `云南话`, `贵州话`, `甘肃话`, `宁夏话`, `石家庄话`, `济南话`, `青岛话`, `桂林话` |
 
-**示例：** `"female, young, high pitch, british accent, whisper"`
+**示例：** `"female, young adult, high pitch, british accent, whisper"`
 
 ## 非语言标签
 

@@ -12,7 +12,7 @@ Model weights are auto-downloaded from HuggingFace on first inference.
 Supports 600+ languages with zero-shot voice cloning and voice design.
 """
 
-__version__ = "0.3.41"
+__version__ = "0.3.7"
 
 import logging
 import sys
@@ -110,13 +110,34 @@ def _check_dependencies() -> tuple[bool, list[tuple[str, list[str]]]]:
         # sub-dependency is missing.  If so, reinstalling with --no-deps
         # won't help — the missing dep needs to be installed separately.
         if importlib.util.find_spec("omnivoice") is not None:
+            _missing_dep = getattr(e, 'name', None) or 'unknown'
             logger.error(
                 f"omnivoice is installed but failed to import: {e}"
             )
-            logger.error(
-                "Reinstalling will not fix this — a sub-dependency is "
-                "likely missing. Check the error above."
-            )
+            # Known sub-deps from install.py — give the correct install command
+            _managed = {
+                "soxr": ["--no-deps"],
+                "soundfile": ["--no-deps"],
+                "scipy": ["--no-deps"],
+                "lazy_loader": ["--no-deps"],
+                "librosa": ["--no-deps"],
+                "sentencepiece": ["--no-deps"],
+                "jieba": ["--no-deps"],
+                "pydub": [],
+                "transformers": ["--upgrade"],
+            }
+            if _missing_dep in _managed:
+                _flags = _managed[_missing_dep]
+                _cmd = " ".join([sys.executable, "-m", "pip", "install"] + _flags + [_missing_dep])
+                logger.error(
+                    f"Missing dependency: '{_missing_dep}'. "
+                    f"Run: {_cmd}"
+                )
+            else:
+                logger.error(
+                    f"Missing or broken dependency: '{_missing_dep}'. "
+                    f"Please report this issue on GitHub."
+                )
             return False, []
         # Genuinely not installed
         logger.warning(f"omnivoice not installed: {e}")
@@ -235,7 +256,8 @@ elif _deps_missing:
             _still = [pkg for pkg, _ in _deps_still_missing]
             logger.error(
                 f"Dependencies still missing after install: {', '.join(_still)}. "
-                f"Try manually: pip install {' '.join(_still)}"
+                f"Please restart ComfyUI. If the issue persists, check the "
+                f"logs above for the actual import error."
             )
     except Exception as e:
         logger.error(f"Failed to install dependencies: {e}")

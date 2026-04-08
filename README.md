@@ -76,7 +76,7 @@ If another package accidentally downgrades your PyTorch, see the [PyTorch Compat
 | preprocess_prompt | BOOLEAN | True | Preprocess reference audio (remove silences) |
 | postprocess_output | BOOLEAN | True | Post-process generated audio (remove long silences) |
 | keep_model_loaded | BOOLEAN | True | Keep model in memory (offloads to CPU between runs) |
-| instruct | STRING | "" | Dialect/style instruction (e.g., `四川话` for Sichuan dialect). Applied to every chunk. Leave empty for default |
+| instruct | STRING | "" | Dialect/style instruction. Only specific values are supported — see [Dialect/Style Instructions](#dialectstyle-instructions). Applied to every chunk |
 
 **Optional Inputs:**
 - `ref_audio` — Reference audio for voice cloning (3-15s optimal)
@@ -109,7 +109,7 @@ If another package accidentally downgrades your PyTorch, see the [PyTorch Compat
 | preprocess_prompt | BOOLEAN | True | Preprocess reference audio (remove silences) |
 | postprocess_output | BOOLEAN | True | Post-process generated audio (remove long silences) |
 | keep_model_loaded | BOOLEAN | True | Keep model in memory |
-| instruct | STRING | "" | Dialect/style instruction (e.g., `四川话` for Sichuan dialect). Leave empty for default |
+| instruct | STRING | "" | Dialect/style instruction. Only specific values are supported — see [Dialect/Style Instructions](#dialectstyle-instructions) |
 
 **Optional Input:**
 - `whisper_model` — Pre-loaded Whisper from OmniVoice Whisper Loader
@@ -168,7 +168,7 @@ If another package accidentally downgrades your PyTorch, see the [PyTorch Compat
 | keep_model_loaded | BOOLEAN | True | Keep model in memory |
 | speaker_N_audio | AUDIO | optional | Reference audio for speaker N (1-10) |
 | speaker_N_ref_text | STRING | "" | Transcript for speaker N's ref audio |
-| speaker_N_instruct | STRING | "" | Dialect/style instruction for speaker N (e.g., `四川话`). Leave empty for default |
+| speaker_N_instruct | STRING | "" | Dialect/style instruction for speaker N. Only specific values are supported — see [Dialect/Style Instructions](#dialectstyle-instructions) |
 
 Speaker inputs dynamically show/hide based on `num_speakers` (ComfyUI >= 0.8.1).
 
@@ -236,15 +236,27 @@ Each speaker needs reference audio connected to the corresponding `speaker_N_aud
 
 ## Dialect/Style Instructions
 
-Voice Clone, Longform, and Multi-Speaker nodes expose an `instruct` field that tells the model to use a specific dialect or speaking style. This is useful for Chinese dialects where the model otherwise defaults to Standard Mandarin.
+Voice Clone, Longform, and Multi-Speaker nodes expose an `instruct` field that tells the model to use a specific dialect or speaking style. **Only the values listed below are supported** — the model validates against a fixed list and will reject unsupported values.
 
-**Examples:**
-| Input | Effect |
-|-------|--------|
-| `四川话` | Sichuan dialect |
-| `陕西话` | Shaanxi dialect |
-| `东北话` | Northeastern dialect |
-| `广东话` | Cantonese (spoken in Mandarin style) |
+**English values** (comma-separated, e.g. `male, indian accent`):
+| Category | Valid Values |
+|----------|-------------|
+| **Gender** | `male`, `female` |
+| **Age** | `child`, `young adult`, `teenager`, `middle-aged`, `elderly` |
+| **Accent** | `american accent`, `british accent`, `australian accent`, `canadian accent`, `chinese accent`, `indian accent`, `japanese accent`, `korean accent`, `portuguese accent`, `russian accent` |
+| **Pitch** | `very low pitch`, `low pitch`, `moderate pitch`, `high pitch`, `very high pitch` |
+| **Style** | `whisper` |
+
+**Chinese values** (full-width comma-separated, e.g. `男，河南话`):
+| Category | Valid Values |
+|----------|-------------|
+| **Gender** | `男`, `女` |
+| **Age** | `儿童`, `少年`, `青年`, `中年`, `老年` |
+| **Dialect** | `四川话`, `东北话`, `陕西话`, `河南话`, `云南话`, `贵州话`, `甘肃话`, `宁夏话`, `石家庄话`, `济南话`, `青岛话`, `桂林话` |
+| **Pitch** | `极低音调`, `低音调`, `中音调`, `高音调`, `极高音调` |
+| **Style** | `耳语` |
+
+> **Note:** Use only English or only Chinese values in a single instruct string — don't mix them.
 
 Leave the field empty for default behaviour (Standard Mandarin for Chinese text).
 
@@ -252,16 +264,16 @@ Leave the field empty for default behaviour (Standard Mandarin for Chinese text)
 
 ## Voice Design Attributes
 
-Comma-separated attributes for `voice_instruct`:
+Comma-separated attributes for `voice_instruct` (same valid values as the `instruct` field above):
 
 | Category | Options |
 |----------|---------|
 | **Gender** | `male`, `female` |
-| **Age** | `child`, `young`, `middle-aged`, `elderly` |
-| **Pitch** | `very low pitch`, `low pitch`, `medium pitch`, `high pitch`, `very high pitch` |
+| **Age** | `child`, `young adult`, `teenager`, `middle-aged`, `elderly` |
+| **Accent** | `american accent`, `british accent`, `australian accent`, `canadian accent`, `chinese accent`, `indian accent`, `japanese accent`, `korean accent`, `portuguese accent`, `russian accent` |
+| **Pitch** | `very low pitch`, `low pitch`, `moderate pitch`, `high pitch`, `very high pitch` |
 | **Style** | `whisper` |
-| **English Accent** | `american accent`, `british accent`, `australian accent`, etc. |
-| **Chinese Dialect** | `四川话`, `陕西话`, `广东话`, `东北话`, `山东话`, etc. |
+| **Chinese Dialect** | `四川话`, `东北话`, `陕西话`, `河南话`, `云南话`, `贵州话`, `甘肃话`, `宁夏话`, `石家庄话`, `济南话`, `青岛话`, `桂林话` |
 
 **Example:** `"female, young, high pitch, british accent, whisper"`
 

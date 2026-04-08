@@ -387,24 +387,25 @@ def load_model(
     logger.info(f"Loading OmniVoice: {model_identifier}")
     logger.info(f"Device: {device_str}, Precision: {dtype}, Attention: {attention} -> {attn_impl or 'default'}")
 
-    # Determine device_map for OmniVoice
+    # Resolve target device string
     if device_str == "cuda":
-        device_map = "cuda:0"
+        target_device = "cuda:0"
     elif device_str == "mps":
-        device_map = "mps"
+        target_device = "mps"
     else:
-        device_map = "cpu"
+        target_device = "cpu"
 
-    # Build kwargs for from_pretrained
+    # Build kwargs — torch_dtype instead of device_map to avoid
+    # accelerate dispatch conflicts with cudaMallocAsync
     load_kwargs = {
-        "device_map": device_map,
-        "dtype": dtype,
+        "torch_dtype": dtype,
     }
     if attn_impl is not None:
         load_kwargs["attn_implementation"] = attn_impl
 
-    # Load model using OmniVoice's from_pretrained
+    # Load weights in correct dtype, then move to device via native PyTorch
     model = OmniVoice.from_pretrained(model_identifier, **load_kwargs)
+    model = model.to(target_device)
 
     model.eval()
 
