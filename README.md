@@ -403,3 +403,13 @@ Add your FFmpeg `bin/` folder to `PATH` in your ComfyUI launch `.bat` file, or u
 ## License
 
 This custom node is released under the Apache 2.0 License. The OmniVoice model has its own license — see [k2-fsa/OmniVoice](https://huggingface.co/k2-fsa/OmniVoice) for details.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=Saganaki22%2FComfyUI-OmniVoice-TTS&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Saganaki22/ComfyUI-OmniVoice-TTS&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Saganaki22/ComfyUI-OmniVoice-TTS&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Saganaki22/ComfyUI-OmniVoice-TTS&type=date&legend=top-left" />
+ </picture>
+</a>

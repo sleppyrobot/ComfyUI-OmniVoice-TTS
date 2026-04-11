@@ -22,6 +22,27 @@ logger = logging.getLogger("OmniVoice")
 MODELS_FOLDER_NAME = "omnivoice"
 
 
+try:
+    import comfy.model_patcher as _cmp
+
+    class OmniVoicePatcher(_cmp.ModelPatcher):
+        """ModelPatcher subclass with aimdo dynamic VRAM reporting."""
+
+        def is_dynamic(self):
+            return True
+
+        def _vbar_get(self):
+            vbars = getattr(self.model, "dynamic_vbars", {})
+            if vbars:
+                return next(iter(vbars.values()))
+            return None
+
+    del _cmp
+except ImportError:
+    # ComfyUI not available (testing outside ComfyUI) — fall back to base
+    OmniVoicePatcher = None
+
+
 def _get_models_base() -> Path:
     """Get or create the models folder path."""
     try:
@@ -431,9 +452,12 @@ def load_model(
         if not patched:
             logger.info("SageAttention: no compatible version found, using default attention.")
 
-    # Apply VBAR/aimdo detection
-    from .model_cache import apply_vbar_detection
-    apply_vbar_detection(model, device_str)
+    # Wrap in ComfyUI ModelPatcher for native VRAM management
+    patcher = OmniVoicePatcher(
+        model,
+        load_device=torch.device(target_device),
+        offload_device=torch.device("cpu"),
+    )
 
     logger.info("OmniVoice model loaded successfully.")
-    return model, None  # No tokenizer needed for OmniVoice
+    return patcher, None  # No tokenizer needed for OmniVoice
