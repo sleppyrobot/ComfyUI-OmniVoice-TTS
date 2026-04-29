@@ -13,6 +13,8 @@ import torch
 from .loader import (
     get_model_names,
     numpy_audio_to_comfy,
+    to_numpy_audio,
+    manual_seed_all,
 )
 from .model_cache import (
     cancel_event,
@@ -142,10 +144,10 @@ class OmniVoiceVoiceDesignTTS:
                     },
                 ),
                 "device": (
-                    ["auto", "cuda", "cpu", "mps"],
+                    ["auto", "cuda", "cpu", "mps", "xpu"],
                     {
                         "default": "auto",
-                        "tooltip": "Compute device. 'auto' picks CUDA > MPS > CPU.",
+                        "tooltip": "Compute device. 'auto' picks CUDA > MPS > XPU > CPU.",
                     },
                 ),
                 "dtype": (
@@ -293,9 +295,7 @@ class OmniVoiceVoiceDesignTTS:
 
         # Set random seed
         actual_seed = seed if seed != 0 else torch.randint(0, 2**31, (1,)).item()
-        torch.manual_seed(actual_seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(actual_seed)
+        manual_seed_all(actual_seed)
 
         self._check_interrupt()
 
@@ -319,15 +319,14 @@ class OmniVoiceVoiceDesignTTS:
                 gen_kwargs["duration"] = duration
 
             # Generate audio with voice design
-            with torch.no_grad():
+            with torch.inference_mode():
                 audio_list = omnivoice_model.generate(**gen_kwargs)
 
             if pbar:
                 pbar.update_absolute(2, 3)
 
             # Convert to ComfyUI format
-            audio_tensor = audio_list[0]  # (1, T)
-            audio_np = audio_tensor.squeeze(0).cpu().numpy()
+            audio_np = to_numpy_audio(audio_list[0])
 
             result = numpy_audio_to_comfy(audio_np, OMNIVOICE_SAMPLE_RATE)
 

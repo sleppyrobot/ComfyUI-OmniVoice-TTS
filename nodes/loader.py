@@ -189,15 +189,39 @@ def _strip_auto_download_suffix(name: str) -> str:
     return name
 
 
+def _is_xpu_available() -> bool:
+    """Check if Intel XPU is available."""
+    return hasattr(torch, "xpu") and torch.xpu.is_available()
+
+
+def manual_seed_all(seed: int) -> None:
+    """Set random seed on all available accelerators."""
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+    if _is_xpu_available():
+        torch.xpu.manual_seed(seed)
+
+
+def empty_cache() -> None:
+    """Free unused GPU memory on all available accelerators."""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if _is_xpu_available():
+        torch.xpu.empty_cache()
+
+
 def _supports_bfloat16() -> bool:
     """Check if the GPU supports bfloat16."""
-    if not torch.cuda.is_available():
-        return False
-    try:
-        major, _ = torch.cuda.get_device_capability()
-        return major >= 8
-    except Exception:
-        return False
+    if torch.cuda.is_available():
+        try:
+            major, _ = torch.cuda.get_device_capability()
+            return major >= 8
+        except Exception:
+            return False
+    if _is_xpu_available():
+        return True
+    return False
 
 
 def resolve_device(device_choice: str) -> Tuple[str, Optional[torch.dtype]]:
@@ -207,7 +231,9 @@ def resolve_device(device_choice: str) -> Tuple[str, Optional[torch.dtype]]:
             return "cuda", None
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps", None
-        logger.warning("No CUDA or MPS GPU detected — falling back to CPU.")
+        if _is_xpu_available():
+            return "xpu", None
+        logger.warning("No CUDA, MPS, or XPU GPU detected — falling back to CPU.")
         return "cpu", None
     return device_choice, None
 
@@ -217,8 +243,8 @@ def resolve_precision(precision_choice: str, device: str) -> torch.dtype:
     if precision_choice == "auto":
         if device == "cuda":
             return torch.bfloat16 if _supports_bfloat16() else torch.float16
-        elif device == "mps":
-            return torch.float16
+        elif device in ("mps", "xpu"):
+            return torch.bfloat16 if device == "xpu" else torch.float16
         return torch.float32
     if precision_choice == "bf16":
         if device == "cuda" and not _supports_bfloat16():
@@ -230,6 +256,26 @@ def resolve_precision(precision_choice: str, device: str) -> torch.dtype:
     if precision_choice == "fp16":
         return torch.float16
     return torch.float32
+
+
+def to_numpy_audio(audio) -> np.ndarray:
+    """Convert model output to numpy array, handling both tensor and numpy input.
+
+    omnivoice.generate() may return torch tensors or numpy arrays depending on
+    version. This normalizes the output to a 1-D numpy array of samples.
+    """
+    import torch
+
+    if isinstance(audio, torch.Tensor):
+        audio = audio.detach().cpu().numpy()
+    audio = np.asarray(audio, dtype=np.float32)
+    # Squeeze leading batch dim if present (1, T) -> (T,)
+    if audio.ndim >= 2 and audio.shape[0] == 1:
+        audio = audio.squeeze(0)
+    # Ensure 1-D: (C, T) -> mix down to mono for TTS output
+    if audio.ndim > 1:
+        audio = audio.mean(axis=0)
+    return audio
 
 
 def numpy_audio_to_comfy(audio_np: np.ndarray, sample_rate: int) -> dict:
@@ -307,6 +353,14 @@ def comfy_audio_to_numpy(audio_dict: dict, target_sr: Optional[int] = None) -> T
     return audio_np, source_sr
 
 
+def transcribe_with_whisper(pipe, audio_np: np.ndarray, sample_rate: int) -> str:
+    """Transcribe in-memory audio with a HuggingFace ASR pipeline."""
+    result = pipe({"array": audio_np.astype(np.float32, copy=False), "sampling_rate": sample_rate})
+    if isinstance(result, dict):
+        return str(result.get("text", "")).strip()
+    return str(result).strip()
+
+
 def _resolve_attn_implementation(attention: str, device: str) -> str | None:
     """Resolve attention implementation for OmniVoice's Qwen3 LLM backbone.
 
@@ -364,7 +418,7 @@ def load_model(
 
     Args:
         model_name: HuggingFace model name or local folder name
-        device: Device choice ("auto", "cuda", "cpu", "mps")
+        device: Device choice ("auto", "cuda", "cpu", "mps", "xpu")
         precision: Precision choice ("auto", "bf16", "fp16", "fp32")
         attention: Attention implementation ("auto", "eager", "sage_attention")
 
@@ -413,6 +467,8 @@ def load_model(
         target_device = "cuda:0"
     elif device_str == "mps":
         target_device = "mps"
+    elif device_str == "xpu":
+        target_device = "xpu"
     else:
         target_device = "cpu"
 

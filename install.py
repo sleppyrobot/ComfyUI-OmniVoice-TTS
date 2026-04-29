@@ -13,6 +13,7 @@ to CPU-only on many systems, breaking ComfyUI's GPU acceleration.
 We work around this by installing omnivoice with --no-deps.
 """
 
+import importlib
 import subprocess
 import sys
 
@@ -74,7 +75,7 @@ def check_torch():
     try:
         import torch
         version = torch.__version__
-        has_cuda = torch.cuda.is_available()
+        has_cuda = torch.cuda.is_available() or (hasattr(torch, "xpu") and torch.xpu.is_available())
         return version, has_cuda
     except ImportError:
         return None, False
@@ -161,6 +162,7 @@ def main():
         ("jieba", "jieba", "Chinese text segmentation"),
         ("pydub", "pydub", "Audio manipulation (required by omnivoice at import time)"),
         ("soxr", "soxr", "Audio resampling (required by transformers HiggsAudio tokenizer)"),
+        ("huggingface_hub", "huggingface_hub", "HuggingFace model downloads"),
     ]
 
     # Packages safe to install with --no-deps (no transitive deps that
