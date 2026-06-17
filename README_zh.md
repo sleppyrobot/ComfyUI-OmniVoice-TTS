@@ -17,7 +17,7 @@
 - **多说话人对白** — 使用 `[Speaker_N]:` 标签生成多人对话
 - **快速推理** — RTF低至0.025（比实时快40倍）
 - **非语言表达** — 内联标签如 `[laughter]`、`[sigh]`、`[sniff]`
-- **SageAttention支持** — 通过monkey-patch Qwen3Attention实现GPU优化注意力（仅CUDA，SM80+）
+- **SageAttention支持** — 对兼容的无mask注意力调用使用Sage内核（仅CUDA，SM80+）
 - **自动下载** — 首次使用时自动从HuggingFace下载模型
 - **Whisper ASR缓存** — 预加载Whisper避免每次重新下载
 - **显存高效** — 自动CPU卸载，VBAR/aimdo集成，智能缓存失效
@@ -65,7 +65,7 @@ python install.py
 | class_temperature | FLOAT | 0.0 | token采样温度（0=贪心） |
 | layer_penalty_factor | FLOAT | 5.0 | 深层码本惩罚因子 |
 | denoise | BOOLEAN | True | 在输入前添加去噪token以获得更干净输出 |
-| preprocess_prompt | BOOLEAN | True | 预处理参考音频（去除静音，添加标点） |
+| preprocess_prompt | BOOLEAN | True | 去除静音；`ref_text`为空时自动裁剪过长参考音频 |
 | postprocess_output | BOOLEAN | True | 后处理生成音频（去除长静音） |
 | keep_model_loaded | BOOLEAN | True | 保持模型加载（运行间自动卸载到CPU） |
 | instruct | STRING | "" | 方言/风格指令，仅支持特定值 — 见[方言/风格指令](#方言风格指令)。应用于每个分块 |
@@ -98,7 +98,7 @@ python install.py
 | class_temperature | FLOAT | 0.0 | token采样温度（0=贪心） |
 | layer_penalty_factor | FLOAT | 5.0 | 深层码本惩罚因子 |
 | denoise | BOOLEAN | True | 在输入前添加去噪token |
-| preprocess_prompt | BOOLEAN | True | 预处理参考音频 |
+| preprocess_prompt | BOOLEAN | True | 去除静音；`ref_text`为空时自动裁剪过长参考音频 |
 | postprocess_output | BOOLEAN | True | 后处理生成音频 |
 | keep_model_loaded | BOOLEAN | True | 保持模型加载 |
 | instruct | STRING | "" | 方言/风格指令，仅支持特定值 — 见[方言/风格指令](#方言风格指令) |
@@ -154,7 +154,7 @@ python install.py
 | class_temperature | FLOAT | 0.0 | token采样温度（0=贪心） |
 | layer_penalty_factor | FLOAT | 5.0 | 深层码本惩罚因子 |
 | denoise | BOOLEAN | True | 在输入前添加去噪token |
-| preprocess_prompt | BOOLEAN | True | 预处理参考音频 |
+| preprocess_prompt | BOOLEAN | True | 去除静音；无转录文本时自动裁剪过长参考音频 |
 | postprocess_output | BOOLEAN | True | 后处理生成音频 |
 | seed | INT | 0 | 随机种子（0=随机） |
 | keep_model_loaded | BOOLEAN | True | 保持模型加载 |
@@ -179,6 +179,13 @@ python install.py
 
 </details>
 
+## 参考音频行为
+
+- 声音克隆仍建议使用3-15秒的清晰语音。
+- 当 `ref_text` 为空且 `preprocess_prompt = True` 时，超过20秒的参考音频会在Whisper转录和声音token编码之前自动缩短到最多15秒。两个阶段使用同一处理后的片段，以避免转录文本与音频不匹配以及过高的内存占用。
+- 如果提供了 `ref_text`，节点会保留完整参考音频，因为自动裁剪会使提供的转录文本不再匹配。为获得最佳质量和内存占用，请手动将参考音频裁剪到3-15秒。
+- 设置 `preprocess_prompt = False` 可关闭自动裁剪和静音预处理。
+
 ## 生成参数指南
 
 这些参数控制基于扩散的音频生成过程：
@@ -194,7 +201,7 @@ python install.py
 | `class_temperature` | token采样随机性 | 0=贪心（确定），越高越随机 |
 | `layer_penalty_factor` | 深层码本惩罚 | 鼓励低层先解码 |
 | `denoise` | 在输入前添加去噪token | 通常可改善输出质量 |
-| `preprocess_prompt` | 清理参考音频 | 去除长静音，添加标点 |
+| `preprocess_prompt` | 清理参考音频 | 去除长静音；无转录文本时自动裁剪过长参考音频 |
 | `postprocess_output` | 清理生成音频 | 去除输出中的长静音 |
 
 ## 注意力后端
@@ -205,7 +212,7 @@ OmniVoice的架构（Qwen3骨干）通过transformers支持的注意力后端有
 |------|----------|
 | `auto` | OmniVoice默认（eager） |
 | `eager` | 标准eager注意力（始终可用） |
-| `sage_attention` | **Monkey-patch Qwen3Attention**为SageAttention CUDA内核。仅GPU，需要SM80+（Ampere+）。当存在注意力mask时回退到SDPA。安装：`pip install sageattention` |
+| `sage_attention` | **Monkey-patch Qwen3Attention**，在兼容的无mask调用中使用SageAttention CUDA内核。OmniVoice带mask的扩散调用会使用原始Transformers注意力路径，以保证双向mask正确。仅GPU，需要SM80+（Ampere+）。安装：`pip install sageattention` |
 
 ### SageAttention GPU兼容性
 | GPU架构 | 计算能力 | 使用的内核 |

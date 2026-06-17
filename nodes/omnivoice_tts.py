@@ -17,6 +17,7 @@ from .loader import (
     comfy_audio_to_numpy,
     to_numpy_audio,
     transcribe_with_whisper,
+    prepare_auto_reference_audio,
     manual_seed_all,
 )
 from .whisper_loader import find_local_whisper_model, load_whisper_pipeline
@@ -542,6 +543,12 @@ class OmniVoiceLongformTTS:
         if use_voice_clone:
             logger.info("Processing reference audio for voice cloning...")
             ref_audio_np, _ = comfy_audio_to_numpy(ref_audio, target_sr=OMNIVOICE_SAMPLE_RATE)
+            if not effective_ref_text:
+                ref_audio_np = prepare_auto_reference_audio(
+                    ref_audio_np,
+                    OMNIVOICE_SAMPLE_RATE,
+                    preprocess_prompt,
+                )
             ref_audio_tensor = torch.from_numpy(ref_audio_np).float()
 
             ref_duration = len(ref_audio_np) / OMNIVOICE_SAMPLE_RATE

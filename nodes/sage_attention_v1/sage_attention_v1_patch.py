@@ -73,14 +73,32 @@ def _v1_sage_attention_forward(
 ):
     """Drop-in replacement for Qwen3Attention.forward using SageAttention V1.
 
-    Falls back to SDPA when attention masks are present (sageattn doesn't
-    support masks) or when past_key_values are in use.
+    Delegates to the original Transformers implementation when an attention
+    mask or KV cache is present because SageAttention does not support those
+    inputs with equivalent semantics.
     """
-    import torch.nn.functional as F
     from transformers.models.qwen3.modeling_qwen3 import (
         apply_rotary_pos_emb,
         repeat_kv,
     )
+
+    if (
+        attention_mask is not None
+        or past_key_values is not None
+        or _sageattn_v1_func is None
+    ):
+        original_forward = getattr(self, "_omnivoice_original_forward", None)
+        if original_forward is None:
+            raise RuntimeError("Original Qwen3Attention.forward is unavailable.")
+        return original_forward(
+            self,
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            **kwargs,
+        )
 
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -99,66 +117,30 @@ def _v1_sage_attention_forward(
         query_states, key_states, cos, sin
     )
 
-    # Check BEFORE the cache update — once past_key_values.update() runs
-    # the variable is still not-None, so checking after always skips sage.
-    _use_cache = past_key_values is not None
-    if _use_cache:
-        cache_kwargs = {
-            "sin": sin,
-            "cos": cos,
-            "cache_position": cache_position,
-        }
-        key_states, value_states = past_key_values.update(
-            key_states, value_states, self.layer_idx, cache_kwargs
-        )
+    original_dtype = query_states.dtype
+    q = query_states.to(_SAGE_V1_TARGET_DTYPE)
+    k = key_states.to(_SAGE_V1_TARGET_DTYPE)
+    v = value_states.to(_SAGE_V1_TARGET_DTYPE)
 
-    # sageattn V1 does not support attention masks or KV-cache scenarios well.
-    # Fall back to SDPA in those cases.
-    use_sage = (
-        attention_mask is None
-        and not _use_cache
-        and _sageattn_v1_func is not None
-    )
-
-    if use_sage:
-        original_dtype = query_states.dtype
-        q = query_states.to(_SAGE_V1_TARGET_DTYPE)
+    # V1 GQA behavior varies by release, so expand KV heads explicitly.
+    if self.num_key_value_groups != 1:
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
         k = key_states.to(_SAGE_V1_TARGET_DTYPE)
         v = value_states.to(_SAGE_V1_TARGET_DTYPE)
 
-        # V1 handles GQA internally when num_key_value_groups > 1,
-        # but we still expand for safety since V1's GQA handling
-        # may not match V2's quality.
-        if self.num_key_value_groups != 1:
-            k = repeat_kv(k, self.num_key_value_groups)
-            v = repeat_kv(v, self.num_key_value_groups)
+    attn_output = _sageattn_v1_func(
+        q,
+        k,
+        v,
+        is_causal=True,
+        smooth_k=_SAGE_V1_SMOOTH_K,
+    )
 
-        # TTS generation is always causal
-        is_causal = True
-        attn_output = _sageattn_v1_func(
-            q, k, v,
-            is_causal=is_causal,
-            smooth_k=_SAGE_V1_SMOOTH_K,
-        )
-
-        # Handle tuple return (V1 sometimes returns extra values)
-        if isinstance(attn_output, tuple):
-            attn_output = attn_output[0]
-        attn_output = attn_output.to(original_dtype)
-        attn_weights = None
-    else:
-        # Standard eager/SDPA path
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        attn_output = F.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=attention_mask,
-            dropout_p=0.0 if not self.training else self.attention_dropout,
-        )
-        attn_weights = None
+    if isinstance(attn_output, tuple):
+        attn_output = attn_output[0]
+    attn_output = attn_output.to(original_dtype)
+    attn_weights = None
 
     attn_output = attn_output.transpose(1, 2).contiguous()
     attn_output = attn_output.reshape(*input_shape, -1)
@@ -193,12 +175,17 @@ def set_sage_attention_v1(model):
     patched_count = 0
     for module in model.modules():
         if isinstance(module, Qwen3Attention):
+            if not hasattr(module, "_omnivoice_original_forward"):
+                module._omnivoice_original_forward = module.forward.__func__
             module.forward = _v1_sage_attention_forward.__get__(
                 module, Qwen3Attention
             )
             patched_count += 1
 
-    logger.info(f"SageAttention V1: patched {patched_count} Qwen3Attention layers.")
+    logger.info(
+        f"SageAttention V1: patched {patched_count} Qwen3Attention layers "
+        "(masked diffusion calls use original attention)."
+    )
     if patched_count == 0:
         logger.warning(
             "SageAttention V1: no Qwen3Attention layers found in model."

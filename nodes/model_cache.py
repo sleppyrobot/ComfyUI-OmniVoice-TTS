@@ -207,9 +207,14 @@ def _register_with_comfy() -> None:
         if any(lm.model is _cached_model for lm in mm.current_loaded_models):
             return
 
+        raw = get_raw_model(_cached_model)
+        raw.dynamic_vbars = getattr(raw, "dynamic_vbars", {})
+        raw.dynamic_pins = getattr(raw, "dynamic_pins", {})
+        if hasattr(_cached_model, "register_load_device"):
+            _cached_model.register_load_device(load_device)
+
         # Create LoadedModel manually — no weight patching
         loaded = mm.LoadedModel(_cached_model)
-        raw = get_raw_model(_cached_model)
 
         # Tell ComfyUI the full model is loaded (set on the inner model
         # since ModelPatcher.loaded_size() reads from self.model)

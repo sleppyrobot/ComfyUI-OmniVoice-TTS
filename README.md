@@ -23,7 +23,7 @@
 - **Multi-Speaker Dialogue** — Generate conversations between multiple speakers using `[Speaker_N]:` tags
 - **Fast Inference** — RTF as low as 0.025 (40x faster than real-time)
 - **Non-Verbal Expressions** — Inline tags like `[laughter]`, `[sigh]`, `[sniff]`
-- **SageAttention Support** — GPU-optimized attention via monkey-patching Qwen3Attention (CUDA, SM80+)
+- **SageAttention Support** — Uses Sage kernels for compatible unmasked attention calls (CUDA, SM80+)
 - **Auto-Download** — Models download automatically from HuggingFace on first use
 - **Whisper ASR Caching** — Pre-load Whisper to avoid re-downloading on each run
 - **VRAM Efficient** — Automatic CPU offload, VBAR/aimdo integration, smart cache invalidation
@@ -73,7 +73,7 @@ If another package accidentally downgrades your PyTorch, see the [PyTorch Compat
 | class_temperature | FLOAT | 0.0 | Token sampling temperature (0=greedy) |
 | layer_penalty_factor | FLOAT | 5.0 | Penalty on deeper codebook layers |
 | denoise | BOOLEAN | True | Prepend denoise token for cleaner output |
-| preprocess_prompt | BOOLEAN | True | Preprocess reference audio (remove silences) |
+| preprocess_prompt | BOOLEAN | True | Remove silences; auto-trim long references when `ref_text` is empty |
 | postprocess_output | BOOLEAN | True | Post-process generated audio (remove long silences) |
 | keep_model_loaded | BOOLEAN | True | Keep model in memory (offloads to CPU between runs) |
 | instruct | STRING | "" | Dialect/style instruction. Only specific values are supported — see [Dialect/Style Instructions](#dialectstyle-instructions). Applied to every chunk |
@@ -106,7 +106,7 @@ If another package accidentally downgrades your PyTorch, see the [PyTorch Compat
 | class_temperature | FLOAT | 0.0 | Token sampling temperature (0=greedy) |
 | layer_penalty_factor | FLOAT | 5.0 | Penalty on deeper codebook layers |
 | denoise | BOOLEAN | True | Prepend denoise token for cleaner output |
-| preprocess_prompt | BOOLEAN | True | Preprocess reference audio (remove silences) |
+| preprocess_prompt | BOOLEAN | True | Remove silences; auto-trim long references when `ref_text` is empty |
 | postprocess_output | BOOLEAN | True | Post-process generated audio (remove long silences) |
 | keep_model_loaded | BOOLEAN | True | Keep model in memory |
 | instruct | STRING | "" | Dialect/style instruction. Only specific values are supported — see [Dialect/Style Instructions](#dialectstyle-instructions) |
@@ -162,7 +162,7 @@ If another package accidentally downgrades your PyTorch, see the [PyTorch Compat
 | class_temperature | FLOAT | 0.0 | Token sampling temperature (0=greedy) |
 | layer_penalty_factor | FLOAT | 5.0 | Penalty on deeper codebook layers |
 | denoise | BOOLEAN | True | Prepend denoise token for cleaner output |
-| preprocess_prompt | BOOLEAN | True | Preprocess reference audio |
+| preprocess_prompt | BOOLEAN | True | Remove silences; auto-trim long references without transcripts |
 | postprocess_output | BOOLEAN | True | Post-process generated audio |
 | seed | INT | 0 | Random seed (0=random) |
 | keep_model_loaded | BOOLEAN | True | Keep model in memory |
@@ -187,6 +187,13 @@ Speaker inputs dynamically show/hide based on `num_speakers` (ComfyUI >= 0.8.1).
 
 </details>
 
+## Reference Audio Behavior
+
+- 3-15 seconds of clear speech remains recommended for voice cloning.
+- When `ref_text` is empty and `preprocess_prompt = True`, reference audio longer than 20 seconds is automatically shortened to at most 15 seconds before Whisper transcription and voice-token encoding. Both stages use the same prepared clip to prevent transcript/audio mismatches and excessive memory use.
+- When `ref_text` is supplied, the full reference is preserved because automatic trimming would make the supplied transcript no longer match. For the best quality and memory use, trim these references manually to 3-15 seconds.
+- Set `preprocess_prompt = False` to disable automatic trimming and silence preprocessing.
+
 ## Generation Parameters Guide
 
 These parameters control the diffusion-based audio generation process:
@@ -202,7 +209,7 @@ These parameters control the diffusion-based audio generation process:
 | `class_temperature` | Randomness in token sampling | 0 = greedy (deterministic), higher = more random |
 | `layer_penalty_factor` | Penalty on deeper codebook layers | Encourages lower layers to unmask first |
 | `denoise` | Prepend denoise token to input | Generally improves output quality |
-| `preprocess_prompt` | Clean reference audio | Removes long silences, adds punctuation |
+| `preprocess_prompt` | Clean reference audio | Removes long silences and auto-trims long references without transcripts |
 | `postprocess_output` | Clean generated audio | Removes long silences from output |
 
 ## Attention Backends
@@ -213,7 +220,7 @@ OmniVoice's architecture (Qwen3 backbone) has limited attention support through 
 |--------|----------------------|
 | `auto` | OmniVoice's default (eager) |
 | `eager` | Standard eager attention (always works) |
-| `sage_attention` | **Monkey-patches Qwen3Attention** with SageAttention CUDA kernels. GPU-only, requires SM80+ (Ampere+). Falls back to SDPA when attention masks are present. Install: `pip install sageattention` |
+| `sage_attention` | **Monkey-patches Qwen3Attention** with SageAttention CUDA kernels for compatible unmasked calls. OmniVoice's masked diffusion calls use the original Transformers attention path for correct bidirectional masking. GPU-only, requires SM80+ (Ampere+). Install: `pip install sageattention` |
 
 ### SageAttention GPU Compatibility
 | GPU Architecture | Compute Capability | Kernel Used |

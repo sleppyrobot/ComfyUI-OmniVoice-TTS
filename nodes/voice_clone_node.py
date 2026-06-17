@@ -15,6 +15,7 @@ from .loader import (
     to_numpy_audio,
     comfy_audio_to_numpy,
     transcribe_with_whisper,
+    prepare_auto_reference_audio,
     manual_seed_all,
 )
 from .model_cache import (
@@ -335,9 +336,15 @@ class OmniVoiceVoiceCloneTTS:
         # Convert reference audio from ComfyUI format to numpy at 24kHz
         logger.info("Processing reference audio...")
         ref_audio_np, ref_sr = comfy_audio_to_numpy(ref_audio, target_sr=OMNIVOICE_SAMPLE_RATE)
+        effective_ref_text = ref_text.strip()
+        if not effective_ref_text:
+            ref_audio_np = prepare_auto_reference_audio(
+                ref_audio_np,
+                OMNIVOICE_SAMPLE_RATE,
+                preprocess_prompt,
+            )
         ref_audio_tensor = torch.from_numpy(ref_audio_np).float()
         ref_duration = len(ref_audio_np) / OMNIVOICE_SAMPLE_RATE
-        effective_ref_text = ref_text.strip()
 
         # Warn about reference audio length
         if ref_duration < 1:

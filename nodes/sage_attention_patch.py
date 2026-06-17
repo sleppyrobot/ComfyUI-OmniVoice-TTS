@@ -1,7 +1,7 @@
 """SageAttention patch for OmniVoice's Qwen3 LLM backbone.
 
 Replaces Qwen3Attention.forward with a SageAttention-accelerated version.
-Falls back to SDPA when attention masks are present (sageattn doesn't support masks).
+Delegates masked calls to the original Transformers attention implementation.
 """
 
 import logging
@@ -70,14 +70,31 @@ def sage_attention_forward(
 ):
     """Drop-in replacement for Qwen3Attention.forward using SageAttention.
 
-    Falls back to SDPA when attention_mask is present (sageattn doesn't
-    support arbitrary masks) or when past_key_values are in use.
+    Delegates to the original Transformers implementation when an attention
+    mask or KV cache is present because SageAttention does not support those
+    inputs with equivalent semantics.
     """
-    import torch.nn.functional as F
     from transformers.models.qwen3.modeling_qwen3 import (
         apply_rotary_pos_emb,
-        repeat_kv,
     )
+
+    if (
+        attention_mask is not None
+        or past_key_values is not None
+        or SAGE_ATTENTION_FUNCTION is None
+    ):
+        original_forward = getattr(self, "_omnivoice_original_forward", None)
+        if original_forward is None:
+            raise RuntimeError("Original Qwen3Attention.forward is unavailable.")
+        return original_forward(
+            self,
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            **kwargs,
+        )
 
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -96,73 +113,34 @@ def sage_attention_forward(
         query_states, key_states, cos, sin
     )
 
-    # Check BEFORE the cache update — once past_key_values is updated the
-    # variable is still not-None, so checking after would always skip sage.
-    _use_cache = past_key_values is not None
-    if _use_cache:
-        cache_kwargs = {
-            "sin": sin,
-            "cos": cos,
-            "cache_position": cache_position,
-        }
-        key_states, value_states = past_key_values.update(
-            key_states, value_states, self.layer_idx, cache_kwargs
-        )
-
-    # sageattn does not support attention masks or KV-cache scenarios well.
-    # Fall back to SDPA in those cases.
-    use_sage = (
-        attention_mask is None
-        and not _use_cache
-        and SAGE_ATTENTION_FUNCTION is not None
+    original_dtype = query_states.dtype
+    target_dtype = (
+        torch.bfloat16
+        if hasattr(self.q_proj, "quant_state")
+        else self.q_proj.weight.dtype
     )
 
-    if use_sage:
-        original_dtype = query_states.dtype
-        target_dtype = (
-            torch.bfloat16
-            if hasattr(self.q_proj, "quant_state")
-            else self.q_proj.weight.dtype
-        )
+    q = query_states.to(target_dtype)
+    k = key_states.to(target_dtype)
+    v = value_states.to(target_dtype)
 
-        q = query_states.to(target_dtype)
-        k = key_states.to(target_dtype)
-        v = value_states.to(target_dtype)
+    # SageAttention handles GQA (num_qo_heads divisible by num_kv_heads)
+    # internally, so we do not repeat KV heads here.
+    attn_output = SAGE_ATTENTION_FUNCTION(
+        q,
+        k,
+        v,
+        tensor_layout="HND",
+        is_causal=True,
+        qk_quant_gran=QK_QUANT_GRAN,
+        pv_accum_dtype=PV_ACCUM_DTYPE,
+    )
 
-        # SageAttention handles GQA (num_qo_heads divisible by num_kv_heads)
-        # internally, so we do NOT repeat_kv here.
-        # TTS generation is always causal — sliding window attention is still
-        # causal (tokens attend only to past tokens within the window).
-        is_causal = True
+    if isinstance(attn_output, tuple):
+        attn_output = attn_output[0]
 
-        attn_output = SAGE_ATTENTION_FUNCTION(
-            q,
-            k,
-            v,
-            tensor_layout="HND",
-            is_causal=is_causal,
-            qk_quant_gran=QK_QUANT_GRAN,
-            pv_accum_dtype=PV_ACCUM_DTYPE,
-        )
-
-        if isinstance(attn_output, tuple):
-            attn_output = attn_output[0]
-
-        attn_output = attn_output.to(original_dtype)
-        attn_weights = None
-    else:
-        # Standard eager/SDPA path
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        attn_output = F.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=attention_mask,
-            dropout_p=0.0 if not self.training else self.attention_dropout,
-        )
-        attn_weights = None
+    attn_output = attn_output.to(original_dtype)
+    attn_weights = None
 
     attn_output = attn_output.transpose(1, 2).contiguous()
     attn_output = attn_output.reshape(*input_shape, -1)
@@ -194,12 +172,17 @@ def set_sage_attention(model):
     patched_count = 0
     for module in model.modules():
         if isinstance(module, Qwen3Attention):
+            if not hasattr(module, "_omnivoice_original_forward"):
+                module._omnivoice_original_forward = module.forward.__func__
             module.forward = sage_attention_forward.__get__(
                 module, Qwen3Attention
             )
             patched_count += 1
 
-    logger.info(f"SageAttention: patched {patched_count} Qwen3Attention layers.")
+    logger.info(
+        f"SageAttention: patched {patched_count} Qwen3Attention layers "
+        "(masked diffusion calls use original attention)."
+    )
     if patched_count == 0:
         logger.warning(
             "SageAttention: no Qwen3Attention layers found in model."

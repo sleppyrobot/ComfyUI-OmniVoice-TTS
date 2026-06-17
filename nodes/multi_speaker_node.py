@@ -19,6 +19,7 @@ from .loader import (
     comfy_audio_to_numpy,
     to_numpy_audio,
     transcribe_with_whisper,
+    prepare_auto_reference_audio,
     manual_seed_all,
 )
 from .model_cache import (
@@ -392,6 +393,7 @@ if _V3:
             if any_without_ref:
                 auto_whisper_pipe = _auto_load_whisper(model, device, dtype)
             auto_ref_texts = {}
+            auto_ref_audios = {}
             if auto_whisper_pipe is not None:
                 for i in range(n):
                     if num_speakers.get(f"speaker_{i + 1}_ref_text", "").strip():
@@ -403,6 +405,12 @@ if _V3:
                         speaker_audio,
                         target_sr=OMNIVOICE_SAMPLE_RATE
                     )
+                    ref_audio_np = prepare_auto_reference_audio(
+                        ref_audio_np,
+                        OMNIVOICE_SAMPLE_RATE,
+                        preprocess_prompt,
+                    )
+                    auto_ref_audios[i + 1] = ref_audio_np
                     auto_ref_texts[i + 1] = transcribe_with_whisper(
                         auto_whisper_pipe, ref_audio_np, OMNIVOICE_SAMPLE_RATE
                     )
@@ -444,10 +452,12 @@ if _V3:
                     )
 
                     # Convert reference audio to numpy at 24kHz
-                    ref_audio_np, _ = comfy_audio_to_numpy(
-                        speaker_audio,
-                        target_sr=OMNIVOICE_SAMPLE_RATE
-                    )
+                    ref_audio_np = auto_ref_audios.get(speaker_idx + 1)
+                    if ref_audio_np is None:
+                        ref_audio_np, _ = comfy_audio_to_numpy(
+                            speaker_audio,
+                            target_sr=OMNIVOICE_SAMPLE_RATE
+                        )
                     effective_ref_text = (
                         speaker_ref_text.strip()
                         or auto_ref_texts.get(speaker_idx + 1, "")
@@ -729,6 +739,7 @@ else:
                 auto_whisper_pipe = _auto_load_whisper(model, device, dtype)
 
             auto_ref_texts = {}
+            auto_ref_audios = {}
             if any_without_ref:
                 whisper_pipe = None
                 if whisper_model is not None:
@@ -747,6 +758,12 @@ else:
                             speaker_audio,
                             target_sr=OMNIVOICE_SAMPLE_RATE
                         )
+                        ref_audio_np = prepare_auto_reference_audio(
+                            ref_audio_np,
+                            OMNIVOICE_SAMPLE_RATE,
+                            preprocess_prompt,
+                        )
+                        auto_ref_audios[i] = ref_audio_np
                         auto_ref_texts[i] = transcribe_with_whisper(
                             whisper_pipe, ref_audio_np, OMNIVOICE_SAMPLE_RATE
                         )
@@ -791,10 +808,12 @@ else:
                     )
 
                     # Convert reference audio to numpy at 24kHz
-                    ref_audio_np, _ = comfy_audio_to_numpy(
-                        speaker_audio,
-                        target_sr=OMNIVOICE_SAMPLE_RATE
-                    )
+                    ref_audio_np = auto_ref_audios.get(speaker_idx + 1)
+                    if ref_audio_np is None:
+                        ref_audio_np, _ = comfy_audio_to_numpy(
+                            speaker_audio,
+                            target_sr=OMNIVOICE_SAMPLE_RATE
+                        )
                     effective_ref_text = (
                         speaker_ref_text.strip()
                         or auto_ref_texts.get(speaker_idx + 1, "")

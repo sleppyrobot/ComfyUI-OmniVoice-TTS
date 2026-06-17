@@ -29,14 +29,111 @@ try:
     class OmniVoicePatcher(_cmp.ModelPatcher):
         """ModelPatcher subclass with aimdo dynamic VRAM reporting."""
 
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.model.dynamic_vbars = getattr(self.model, "dynamic_vbars", {})
+            self.model.dynamic_pins = getattr(self.model, "dynamic_pins", {})
+            self.register_load_device(self.load_device)
+
         def is_dynamic(self):
             return True
 
-        def _vbar_get(self):
+        def _empty_host_buffer(self):
+            try:
+                import comfy_aimdo.host_buffer
+                return comfy_aimdo.host_buffer.HostBuffer(0, 0, 0)
+            except Exception:
+                class _EmptyHostBuffer:
+                    size = 0
+                return _EmptyHostBuffer()
+
+        def _empty_pin_state(self):
+            return {
+                "weights": (self._empty_host_buffer(), [], [-1], [0], [0], {}),
+                "patches": (self._empty_host_buffer(), [], [-1], [0], [0], {}),
+                "hostbufs_initialized": False,
+                "failed": False,
+                "active": False,
+            }
+
+        def register_load_device(self, device):
+            self.model.dynamic_pins = getattr(self.model, "dynamic_pins", {})
+            if device not in self.model.dynamic_pins:
+                self.model.dynamic_pins[device] = self._empty_pin_state()
+
+        def _vbar_get(self, create=False):
             vbars = getattr(self.model, "dynamic_vbars", {})
-            if vbars:
-                return next(iter(vbars.values()))
-            return None
+            return vbars.get(self.load_device) or next(iter(vbars.values()), None)
+
+        def loaded_size(self):
+            vbar = self._vbar_get()
+            if vbar is not None:
+                return vbar.loaded_size()
+            return getattr(self.model, "model_loaded_weight_memory", 0)
+
+        def loaded_ram_size(self):
+            return 0
+
+        def pinned_memory_size(self):
+            return 0
+
+        def unregister_inactive_pins(self, ram_to_unload, subsets=("weights", "patches")):
+            return 0
+
+        def partially_unload_ram(self, ram_to_unload, subsets=("weights", "patches")):
+            pin_state = self.model.dynamic_pins.get(self.load_device)
+            if pin_state is not None:
+                pin_state["active"] = False
+            return 0
+
+        def partially_load(self, device_to, extra_memory=0, force_patch_weights=False):
+            device_to = torch.device(device_to)
+            self.register_load_device(device_to)
+            before = self.loaded_size()
+            self.model.to(device_to)
+            self.model.model_loaded_weight_memory = (
+                self.model_size() if self._vbar_get() is None else 0
+            )
+            return max(0, self.loaded_size() - before)
+
+        def partially_unload(self, device_to, memory_to_free=0, force_patch_weights=False):
+            before = self.loaded_size()
+            self.detach()
+            return before
+
+        def detach(self, unpatch_all=True):
+            """Offload OmniVoice without assigning its read-only device property.
+
+            ComfyUI's base ModelPatcher.detach() runs diffusion-model unpatching
+            and assigns ``self.model.device``.  HuggingFace OmniVoice derives
+            device from its parameters and exposes no setter, so move the
+            module directly and reset only the bookkeeping we own.
+            """
+            try:
+                self.model.to(self.offload_device)
+                self.model.model_loaded_weight_memory = 0
+                if hasattr(self.model, "model_offload_buffer_memory"):
+                    self.model.model_offload_buffer_memory = 0
+                if hasattr(self.model, "dynamic_vbars"):
+                    self.model.dynamic_vbars.clear()
+                pin_state = self.model.dynamic_pins.get(self.load_device)
+                if pin_state is not None:
+                    pin_state["active"] = False
+            except Exception:
+                pass
+            clear_cache = globals().get("empty_cache")
+            if callable(clear_cache):
+                try:
+                    clear_cache()
+                except Exception:
+                    pass
+            return self.model
+
+        def current_loaded_device(self):
+            try:
+                return next(self.model.parameters()).device
+            except (StopIteration, AttributeError):
+                return self.offload_device
 
     del _cmp
 except ImportError:
@@ -362,6 +459,66 @@ def transcribe_with_whisper(pipe, audio_np: np.ndarray, sample_rate: int) -> str
     return str(result).strip()
 
 
+def prepare_auto_reference_audio(
+    audio_np: np.ndarray,
+    sample_rate: int,
+    preprocess_prompt: bool,
+) -> np.ndarray:
+    """Match OmniVoice's long-reference trimming before external ASR.
+
+    OmniVoice trims auto-transcribed references longer than 20 seconds to
+    at most 15 seconds. External transcription must use the same shortened
+    waveform; otherwise passing the generated transcript as ``ref_text``
+    makes OmniVoice treat it as user-provided and skip its own trim.
+    """
+    audio = np.asarray(audio_np, dtype=np.float32)
+    if audio.ndim != 1:
+        audio = np.squeeze(audio)
+        if audio.ndim != 1:
+            audio = audio.mean(axis=0)
+
+    if not preprocess_prompt or sample_rate <= 0:
+        return np.ascontiguousarray(audio)
+
+    original_duration = audio.shape[-1] / sample_rate
+    if original_duration <= 20.0:
+        return np.ascontiguousarray(audio)
+
+    max_samples = int(15.0 * sample_rate)
+    try:
+        from omnivoice.utils.audio import trim_long_audio
+
+        trimmed = trim_long_audio(
+            audio[np.newaxis, :],
+            sample_rate,
+            max_duration=15.0,
+            min_duration=3.0,
+            trim_threshold=20.0,
+        )
+        trimmed = np.asarray(trimmed, dtype=np.float32)
+        trimmed = np.squeeze(trimmed)
+        if trimmed.ndim != 1:
+            trimmed = trimmed.mean(axis=0)
+    except Exception as e:
+        logger.warning(
+            f"Could not split long reference at silence ({e}); "
+            "using the first 15 seconds."
+        )
+        trimmed = audio[:max_samples]
+
+    # The upstream helper can return the original waveform when it cannot
+    # find speech. Keep external Whisper and the audio tokenizer bounded.
+    if trimmed.size == 0 or trimmed.shape[-1] > max_samples:
+        trimmed = audio[:max_samples]
+
+    trimmed = np.ascontiguousarray(trimmed, dtype=np.float32)
+    logger.info(
+        f"Auto-transcription reference trimmed from {original_duration:.1f}s "
+        f"to {trimmed.shape[-1] / sample_rate:.1f}s."
+    )
+    return trimmed
+
+
 def _resolve_attn_implementation(attention: str, device: str) -> str | None:
     """Resolve attention implementation for OmniVoice's Qwen3 LLM backbone.
 
@@ -488,6 +645,13 @@ def load_model(
     model = model.to(target_device)
 
     model.eval()
+
+    # Newer ComfyUI DynamicVRAM expects dynamic patchers to expose both
+    # dynamic_vbars and dynamic_pins on the wrapped model.  OmniVoice does
+    # not use ComfyUI's per-weight pin state, but the empty dict keeps the
+    # interface compatible while aimdo VBar residency is attached later.
+    model.dynamic_vbars = getattr(model, "dynamic_vbars", {})
+    model.dynamic_pins = getattr(model, "dynamic_pins", {})
 
     # Apply SageAttention monkey-patch if requested
     if attention == "sage_attention":
